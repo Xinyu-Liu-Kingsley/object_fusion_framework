@@ -1,0 +1,285 @@
+
+% Description: 按照dbc协议对目标作选择输出，对有效区域的目标做输出
+% Author : Zhou Yanzong
+% log:
+% ...
+%****************************************************************%
+function out = updateOutVeh(tracks,frameData,isFill) %#codegen
+% 按照要求整理输出,最多输出10个目标；
+
+out = repmat(obstacle_const.FusedObject, obstacle_const.cfg.EOut_vehs_num,1);
+%% -----------------------------处理车道线数据---------------------------------------------
+% 定义左右车道的系数
+C_left = zeros(1,3);  % 左车道线方程系数
+C_right = zeros(1,3); % 右车道线方程系数
+C_left_range = 0;     % 左车道
+C_right_range = 0;    % 右车道
+lane_list = frameData.CameraFrame.LaneList;
+for i = 1:obstacle_const.max_lane_num
+    if lane_list(i).flag>0
+        if lane_list(i).lane_locaiotn == lane_index.l_line  % 左车道
+            C_left = [lane_list(i).C3,lane_list(i).C2,lane_list(i).C1,lane_list(i).C0];
+            C_left_range = lane_list(i).view_range;
+        elseif lane_list(i).lane_locaiotn == lane_index.r_line  % 右车道
+            C_right = [lane_list(i).C3,lane_list(i).C2,lane_list(i).C1,lane_list(i).C0];
+            C_right_range = lane_list(i).view_range;
+        end
+    end
+end
+%% ------------------------------ 目标筛选，删除一定区域内未融合状态的目标-------------------------------------------
+
+isFillFilter= ROIfilterObjects(tracks,C_left,C_right,C_left_range,C_right_range,isFill);
+
+%% ------------------------------ BSD目标筛选-------------------------------------------
+
+isFillFilter= BSDfilterObjects(tracks,isFill,isFillFilter);
+
+%% -----------------------------out做限制，最多输出 obstacle_const.cfg.EOut_vehs_num-----------
+if tracks.idxCIPV ~=0
+    out(1) = tracks.output(tracks.idxCIPV);
+    out(1).ID = tracks.idxCIPV;
+    %     out(1).obj_dyn_prop = 1018;   %temp用obj_dyn_prop 记录版本号
+    out(1).flag = uint8(1);
+end
+idxf = uint8(1);
+for ii = 1:obstacle_const.max_obs_fuse
+    if isFillFilter(ii) && ii ~= tracks.idxCIPV
+        if idxf < obstacle_const.cfg.EOut_vehs_num
+            idxf = idxf + uint8(1);
+            out(idxf).ID = ii;                % !!!注意是否满足，生成代码ID会从0开始；
+            out(idxf).fusedCamID = tracks.output(ii).fusedCamID;
+            out(idxf).fusedRadID = tracks.output(ii).fusedRadID;
+            out(idxf).CIPV = tracks.output(ii).CIPV;
+            out(idxf).CIPP = tracks.output(ii).CIPP;
+            out(idxf).x = tracks.output(ii).x;
+            out(idxf).y = tracks.output(ii).y;
+            out(idxf).velo_x = tracks.output(ii).velo_x;
+            out(idxf).velo_y = tracks.output(ii).velo_y;
+            out(idxf).obj_width = tracks.output(ii).obj_width;
+            out(idxf).cls = tracks.output(ii).cls;
+            out(idxf).state = tracks.output(ii).state;
+            out(idxf).ay = tracks.output(ii).ay;
+            out(idxf).obj_width =  tracks.output(ii).obj_width;
+            out(idxf).obj_det_prop = tracks.output(ii).obj_det_prop;      % 目标融合状态 0: undefined 1: sole-radar 2: sole-camera 3: fused
+            out(idxf).obj_exist_prop = tracks.output(ii).obj_exist_prop;  % 目标存在概率
+            out(idxf).obj_dyn_prop = tracks.output(ii).obj_dyn_prop;
+            out(idxf).obj_lane = tracks.output(ii).obj_lane;
+            out(idxf).obj_direction = tracks.output(ii).obj_direction;
+            out(idxf).img_lane = tracks.output(ii).img_lane;
+            out(idxf).motionStatus = tracks.output(ii).motionStatus;     % 目标运动状态
+            out(idxf).motionCategory = tracks.output(ii).motionCategory; % 目标
+            out(idxf).det_src = tracks.output(ii).det_src; % 数据来源
+            out(idxf).TTC = tracks.output(ii).TTC; % TTC
+            out(idxf).flag = uint8(1);
+        else  % 已满，判别替换/丢掉；
+            out = find_pos_for_obs(out,tracks.output(ii),ii,isFill);
+        end
+
+    end
+end
+
+end
+
+function  out = find_pos_for_obs(out,obs,ii,isFill)
+% 输出目标列表已满，在目标列表中替换该目标或删掉该目标
+coder.inline('always')
+% 横纵向最远
+maxY0 = 0;
+maxX0 = 2.5;
+ireplace0 = uint8(255);
+
+% 纵向最远
+maxX1 = 0;
+ireplace1 = uint8(255);
+
+for idx = 1:obstacle_const.cfg.EOut_vehs_num
+    if isFill(idx)
+        if abs(out(idx).x) > maxX0 && abs(out(idx).y)>maxY0
+            maxX0 = abs(out(idx).x);
+            maxY0 = abs(out(idx).y);
+            ireplace0 = idx;
+        end
+        %         if out(idx).x>maxX1 && out(idx).CIPV==uint8(0)
+        %             maxX1 = out(idx).x;
+        %             ireplace1 = idx;
+        %         end
+    end
+end
+
+if (abs(obs.x) < maxX0 || abs(obs.y)<maxY0) && ireplace0~= uint8(255) % 横纵向最远有无匹配
+    ireplace = ireplace0;
+elseif  obs.y<maxY0 && ireplace1~= uint8(255)  % 纵向最远有无匹配
+    ireplace = ireplace1;
+else
+    ireplace = uint8(255);
+end
+
+if ireplace ~= uint8(255) && ireplace ~= uint8(1)
+    %     disp_info(sprintf('updateTracksO >> target is not output! C : [%+6.2f, %+6.2f]', ...
+    %         out(ireplace).x, out(ireplace).y), info_cls.obstacle, info_spec.warning)
+    % 放置该位置
+    out(ireplace).ID = ii;                % !!!注意是否满足，生成代码ID会从0开始；
+    out(ireplace).x = obs.x;
+    out(ireplace).y = obs.y;
+    out(ireplace).velo_x = obs.velo_x;
+    out(ireplace).velo_y = obs.velo_y;
+    out(ireplace).obj_width = obs.obj_width;
+    %     out(ireplace).direction = obs.direction;
+    out(ireplace).cls = obs.cls;
+    out(ireplace).state = obs.state;
+
+else  % 丢掉当前目标；
+    %     disp_info(sprintf('updateTracksO >> target is not output! C : [%+6.2f, %+6.2f]', ...
+    %         obs.x, obs.y), info_cls.obstacle, info_spec.warning)
+end
+
+end
+
+function [direction] = verify_direction(tracks,idx,dire)
+% 基于历史状态判断行驶方向
+coder.inline('always')
+
+historyL = uint8(5);  % 取历史长度；
+direcList = zeros(historyL,1,'uint8');
+
+i = tracks.cursor;
+ii = uint8(0);
+cnt = uint8(0);
+while ii<historyL
+    if i == uint8(1)
+        i = obstacle_const.track_depth;
+    else
+        i = i -uint8(1);
+    end
+    if tracks.matrix(i,idx).flag
+        cnt = cnt + uint8(1);
+        direcList(cnt) = tracks.matrix(i,idx).direction;
+    end
+    ii = ii+ uint8(1);
+end
+
+if cnt >= historyL*0.5
+    direcVal = unique(direcList(1:cnt),'stable');
+    direcValN = uint8(1);
+    direcval = uint8(0);
+    for jj = 1:numel(direcVal)
+        n = sum(direcList(1:cnt) == direcVal(jj));
+        if n>direcValN
+            direcValN = uint8(n);
+            direcval = uint8(direcVal(jj));
+        end
+    end
+    direction = direcval;
+else
+    direction = dire;
+end
+
+end
+
+function [isFillFilter] = ROIfilterObjects(tracks,C_left,C_right,C_left_range,C_right_range,isFill)
+
+%=================左右车道最近轨迹========================
+global g_ego_status
+minYL = 200; idxL = uint8(255);
+minYR = 200; idxR = uint8(255);
+def_wid_half = 2;
+isFillFilter = false(obstacle_const.max_obs_fuse,1);
+for i = 1:obstacle_const.max_obs_fuse
+    if ~isFill(i)
+        continue;
+    end
+    if tracks.output(i).det_src == det_src.left_forward || tracks.output(i).det_src == det_src.left_backward ||...
+       tracks.output(i).det_src == det_src.right_forward || tracks.output(i).det_src == det_src.right_backward    
+        continue;
+    end
+    %     if  tracks.output(i).y<minYL || tracks.output(i).y<minYR
+    % 左右车道线界限
+    if C_left_range>10
+        xl = polyval(C_left,  tracks.output(i).y);
+    else
+        xl = -def_wid_half;
+    end
+    if C_right_range>10
+        xr = polyval(C_right,  tracks.output(i).y);
+    else
+        xr = def_wid_half;
+    end
+    % 输出状态逻辑 融合目标 || 暂时丢帧，但是Radar和Camera的融合状态大于16帧的目标
+    fusedState = (tracks.output(i).obj_det_prop == obs_det_prop.fused ||...
+        ((tracks.output(i).obj_det_prop == obs_det_prop.sole_radar||tracks.output(i).obj_det_prop == obs_det_prop.sole_camera) ...
+        && tracks.status(i).CNTFused>= obstacle_const.cfg.thres_IDassign)); % 判断能否输出
+    if fusedState
+        isFillFilter(i) = true;
+    end
+    %     % 左侧
+    %     if tracks.output(i).x<xl && tracks.output(i).x>(xl-lane_const.cfg.def_wid_half*2)...
+    %             && fusedState  % 只输出融合状态的目标
+    %         isFillFilter(i) = true;
+    %     end
+    % 左侧最近
+    if tracks.output(i).x<xl && tracks.output(i).x>(xl-lane_const.cfg.def_wid_half*2)&&...
+            tracks.output(i).y<minYL
+        minYL =  tracks.output(i).y;
+        idxL = uint8(i);
+    end
+    %     % 右侧
+    %     if tracks.output(i).x>xr && tracks.output(i).x<(xr+lane_const.cfg.def_wid_half*2)&&...
+    %             fusedState       %  只输出融合状态的目标
+    %         isFillFilter(i) = true;
+    %     end
+    % 右侧最近
+    if tracks.output(i).x>xr && tracks.output(i).x<(xr+lane_const.cfg.def_wid_half*2)&&...
+            tracks.output(i).y<minYR
+        minYR =  tracks.output(i).y;
+        idxR = uint8(i);
+    end
+    %     % 筛选中间车道且是融合状态的目标
+    %     if tracks.output(i).x>xl && tracks.output(i).x<xr && fusedState
+    %         isFillFilter(i) = true;                                %    只输出融合状态的目标
+    %     end
+    %     end
+end
+% 左右车道线，除了左右最近目标，且最近距离限制在20m以内，可输出单雷达状态（运动目标）,对输出状态进行修正
+if idxR ~= 255 && tracks.output(idxR).y <= 20 && (tracks.output(idxR).velo_y + g_ego_status.speed/3.6 >=2) 
+    isFillFilter(idxR) = true;
+end
+if idxL ~= 255 && tracks.output(idxL).y <= 20 && (tracks.output(idxL).velo_y + g_ego_status.speed/3.6 >=2) 
+    isFillFilter(idxL) = true;
+end
+
+end
+
+function [isFillFilter] = BSDfilterObjects(tracks,isFill,isFillFilter)
+
+global g_ego_status
+for i = 1:obstacle_const.max_obs_fuse
+    if ~isFill(i)
+        continue;
+    end
+     % 输出直行盲区和变道盲区内角雷达目标（运动目标）
+    BlindSpotTarget = ((tracks.output(i).det_src == det_src.left_forward||tracks.output(i).det_src == det_src.left_backward||...
+        tracks.output(i).det_src == det_src.right_backward||tracks.output(i).det_src == det_src.right_forward) &&...
+        (tracks.output(i).y <=3 && tracks.output(i).y >=-70 && tracks.output(i).x >=-4.2 && tracks.output(i).x <=4.2) &&...
+        (tracks.output(i).velo_y + g_ego_status.speed/3.6 >=3.5)&& (abs(g_ego_status.yawrate)<30 || abs(g_ego_status.SW_angle)<5) &&...
+        (tracks.output(i).x <=-1.2 || tracks.output(i).x >=1.2 || tracks.output(i).y <=-6 || tracks.output(i).y >=0)); % 判断能否输出
+
+     % 输出右转向盲区内角雷达目标
+    RightTurnBlindSpotTarget = ((tracks.output(i).det_src == det_src.left_forward||tracks.output(i).det_src == det_src.left_backward||...
+        tracks.output(i).det_src == det_src.right_backward||tracks.output(i).det_src == det_src.right_forward) &&...
+        (tracks.output(i).y <=3 && tracks.output(i).y >=-10.415 && tracks.output(i).x >=0.5 && tracks.output(i).x <=5) &&...
+        (tracks.output(i).velo_y + g_ego_status.speed/3.6 >=2) && g_ego_status.speed<=30 && g_ego_status.yawrate>30 && g_ego_status.SW_angle<-5); % 判断能否输出
+
+     % 筛选角雷达FOV重合的目标
+    idOverlap=uint8(0);
+    for j=1:i-1
+        if abs(tracks.output(i).y-tracks.output(j).y)+abs(tracks.output(i).x-tracks.output(j).x)<2
+            idOverlap=uint8(i);
+            continue
+        end
+    end
+        if (BlindSpotTarget || RightTurnBlindSpotTarget) && idOverlap~=i
+            isFillFilter(i) = true;
+        end
+end
+
+end
