@@ -21,7 +21,7 @@ end
 
 % const_file = 'local_path.mat';
 if ~exist('dat_path')
-    dat_path = 'G:\02_Prj\code\new_fusion\dataset\2024-09-25\';  % 源数据路径：.mat, .asc
+    dat_path = 'G:\02_Prj\code\object_fusion_framework\dataset\2024-09-25\';  % 源数据路径：.mat, .asc
     raw_path = [dat_path, 'frmData'];
 end
 vid_path = [dat_path, 'video'];
