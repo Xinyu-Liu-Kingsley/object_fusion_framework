@@ -46,7 +46,7 @@ mbdInitizlizeObstacle(vid.FrameRate, g_cfg_auto.min_conf, ...
 % !!!更新自车车身参数 !!!!!
 g_ego_params.width = 2.4;             % m, 车身宽度；
 g_ego_params.front_overhang = 1.45;   % m, 前悬长度；
-g_ego_params.length = 6;            % m, 车长；
+g_ego_params.length = 6;              % m, 车长；
 
 %% ==============  获取雷达和摄像头数据============================================ %%
 % 暂时删除该数据，未测试 testData\CameraMatrix.mat RadMatrix.mat

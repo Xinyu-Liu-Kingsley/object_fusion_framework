@@ -40,7 +40,7 @@ for j = 1:1:length(CameraObjectList)
                                     (tracks.status(i).start_Range >100 && tracks.status(i).matchErrorFlag <1))
                                     % 航迹帧数大于20,稳定航迹用ID assign
                                     % %航迹起始大于100，需要更新传感器ID
-                                    matchID(j,m) = 1;
+                                    matchID(j,m) = 1;  % 相机索引 - 雷达索引
                                     flag_Rused(m,1) = uint8(1);
 %                                     x_current_radar = RadarObjectList(m).x;
 %                                     y_current_radar = RadarObjectList(m).y;
